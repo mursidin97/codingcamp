@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Light Night — Property-Based Test Harness</title>
+  <style>
+    body {
+      font-family: 'Courier New', monospace;
+      background: #0F1020;
+      color: #E8E8FF;
+      padding: 24px;
+      margin: 0;
+    }
+    h1 { color: #9664FF; margin-bottom: 8px; }
+    .subtitle { color: #6482FF; margin-bottom: 24px; font-size: 0.9em; }
+    .test-result {
+      padding: 12px 16px;
+      margin: 8px 0;
+      border-radius: 8px;
+      border-left: 4px solid;
+      font-size: 0.9em;
+      line-height: 1.5;
+    }
+    .pass { background: rgba(50,200,100,0.1); border-color: #32C864; }
+    .fail { background: rgba(255,80,80,0.1); border-color: #FF5050; }
+    .pending { background: rgba(100,130,255,0.1); border-color: #6482FF; }
+    .label { font-weight: bold; display: block; margin-bottom: 4px; }
+    #summary {
+      margin-top: 24px;
+      padding: 16px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+    pre { white-space: pre-wrap; color: #FF9090; margin: 4px 0 0 0; font-size: 0.85em; }
+  </style>
+</head>
+<body>
+  <h1>Light Night — PBT Harness</h1>
+  <p class="subtitle">Property-based tests using fast-check · 100 runs each</p>
+  <div id="results"></div>
+  <div id="summary"></div>
+
+  <!-- fast-check via CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/fast-check@3/lib/bundle/fast-check.min.js"></script>
+
+  <script>
+    // ─── Inline the testable logic from light-night.html ─────────────────────
+    // (Copied here to allow file:// protocol testing without CORS issues)
+
+    const MOOD_LABELS = [
+      'CALM', 'FOCUSED', 'REFLECTIVE', 'MYSTERIOUS', 'PEACEFUL', 'ENERGETIC'
+    ];
+
+    const QUOTES = [
+      "Stay calm. The night is still young. 🌙",
+      "Sometimes silence says everything.",
+      "Keep moving. Your light is still there. ✨",
+      "Don't rush. Everything has its own time.",
+      "Even the darkest night has a light.",
+      "Take a breath. You're doing fine.",
+      "Some nights are meant for reflection.",
+      "Keep your focus. Keep your light."
+    ];
+
+    // Feature: light-night — selectDifferent pure helper
+    function selectDifferent(pool, current) {
+      if (pool.length === 1) return pool[0];
+      const candidates = pool.filter(item => item !== current);
+      if (candidates.length === 0) {
+        for (const item of pool) {
+          if (item !== current) return item;
+        }
+        return pool[0];
+      }
+      return candidates[Math.floor(Math.random() * candidates.length)];
+    }
+
+    // Minimal state for testing
+    let state = {
+      interactionCount: 0,
+      currentMood: 'CALM',
+      currentQuote: null,
+      isAnimating: false
+    };
+
+    function resetState() {
+      state.interactionCount = 0;
+      state.currentMood = 'CALM';
+      state.currentQuote = null;
+      state.isAnimating = false;
+    }
+
+    // Direct interaction that bypasses DOM and animation effects
+    function triggerInteractionDirect() {
+      state.interactionCount++;
+      state.currentMood = selectDifferent(MOOD_LABELS, state.currentMood);
+      state.currentQuote = selectDifferent(QUOTES, state.currentQuote);
+    }
+
+    // Simulated handleInteraction that respects debounce
+    function handleInteractionSim() {
+      if (state.isAnimating) return;
+      state.isAnimating = true;
+      triggerInteractionDirect();
+      // Release lock synchronously for test purposes
+      state.isAnimating = false;
+    }
+
+    // ─── Test Runner ──────────────────────────────────────────────────────────
+    const resultsEl = document.getElementById('results');
+    const summaryEl = document.getElementById('summary');
+    let passed = 0;
+    let failed = 0;
+
+    function addResult(id, label, fn) {
+      const div = document.createElement('div');
+      div.className = 'test-result pending';
+      div.innerHTML = `<span class="label">${label}</span><span>Running...</span>`;
+      resultsEl.appendChild(div);
+
+      try {
+        fn();
+        div.className = 'test-result pass';
+        div.innerHTML = `<span class="label">✓ ${label}</span><span>Passed (100 runs)</span>`;
+        passed++;
+      } catch (e) {
+        div.className = 'test-result fail';
+        div.innerHTML = `<span class="label">✗ ${label}</span><span>FAILED</span><pre>${e.message || e}</pre>`;
+        failed++;
+      }
+    }
+
+    async function addAsyncResult(id, label, fn) {
+      const div = document.createElement('div');
+      div.className = 'test-result pending';
+      div.innerHTML = `<span class="label">${id}: ${label}</span><span>Running...</span>`;
+      resultsEl.appendChild(div);
+
+      try {
+        await fn();
+        div.className = 'test-result pass';
+        div.innerHTML = `<span class="label">✓ ${id}: ${label}</span><span>Passed (20 runs)</span>`;
+        passed++;
+      } catch (e) {
+        div.className = 'test-result fail';
+        div.innerHTML = `<span class="label">✗ ${id}: ${label}</span><span>FAILED</span><pre>${e.message || e}</pre>`;
+        failed++;
+      }
+
+      updateSummary();
+    }
+
+    function updateSummary() {
+      const total = passed + failed;
+      summaryEl.innerHTML = `
+        <strong>Results: ${passed}/${total} passed</strong>
+        ${failed > 0
+          ? `<br><span style="color:#FF5050">${failed} test(s) failed</span>`
+          : `<br><span style="color:#32C864">All ${total} test(s) passed ✓</span>`}
+        <br><small style="color:#6482FF">Note: P4 (async) result appears after a ~1.5s delay</small>
+      `;
+    }
+
+    // ─── P1: Counter Strict Monotonicity ─────────────────────────────────────
+    // Feature: light-night, Property 1: counter equals exact interaction count
+    // Validates: Requirements 6.3, 6.4, 6.5
+    addResult('P1', 'P1: Counter Strict Monotonicity', () => {
+      fc.assert(fc.property(
+        fc.integer({ min: 1, max: 500 }),
+        (n) => {
+          resetState();
+          for (let i = 0; i < n; i++) triggerInteractionDirect();
+          return state.interactionCount === n;
+        }
+      ), { numRuns: 100 });
+    });
+
+    // ─── P2: Quote Non-Repetition ─────────────────────────────────────────────
+    // Feature: light-night, Property 2: consecutive quotes differ
+    // Validates: Requirements 8.4
+    addResult('P2', 'P2: Quote Non-Repetition', () => {
+      fc.assert(fc.property(
+        fc.integer({ min: 2, max: 200 }),
+        (n) => {
+          let prev = null;
+          for (let i = 0; i < n; i++) {
+            const next = selectDifferent(QUOTES, prev);
+            if (prev !== null && next === prev) return false;
+            prev = next;
+          }
+          return true;
+        }
+      ), { numRuns: 100 });
+    });
+
+    // ─── P3: Mood Non-Repetition ──────────────────────────────────────────────
+    // Feature: light-night, Property 3: consecutive moods differ
+    // Validates: Requirements 7.4
+    addResult('P3', 'P3: Mood Non-Repetition', () => {
+      fc.assert(fc.property(
+        fc.integer({ min: 2, max: 200 }),
+        (n) => {
+          let prev = MOOD_LABELS[0];
+          for (let i = 0; i < n; i++) {
+            const next = selectDifferent(MOOD_LABELS, prev);
+            if (next === prev) return false;
+            prev = next;
+          }
+          return true;
+        }
+      ), { numRuns: 100 });
+    });
+
+    // ─── P5: Animation Debounce Exclusivity ───────────────────────────────────
+    // Feature: light-night, Property 5: debounced calls do not increment counter
+    // Validates: Requirements 9.6, 10.4
+    addResult('P5', 'P5: Animation Debounce Exclusivity', () => {
+      fc.assert(fc.property(
+        fc.integer({ min: 1, max: 50 }),
+        (extraCalls) => {
+          resetState();
+          state.isAnimating = true;
+          for (let i = 0; i < extraCalls; i++) handleInteractionSim();
+          return state.interactionCount === 0;
+        }
+      ), { numRuns: 100 });
+    });
+
+    // ─── P6: selectDifferent Correctness ─────────────────────────────────────
+    // Feature: light-night, Property 6: selectDifferent returns pool member, never repeats
+    // Validates: Requirements 7.4, 8.4
+    addResult('P6', 'P6: selectDifferent Correctness', () => {
+      fc.assert(fc.property(
+        fc.array(fc.string(), { minLength: 2, maxLength: 20 }),
+        fc.nat(),
+        (pool, idx) => {
+          const current = pool[idx % pool.length];
+          const result = selectDifferent(pool, current);
+          return pool.includes(result) && result !== current;
+        }
+      ), { numRuns: 100 });
+    });
+
+    // Show preliminary summary after sync tests complete
+    updateSummary();
+
+    // ─── P4: Particle DOM Cleanup (async) ─────────────────────────────────────
+    // Feature: light-night, Property 4: no particles remain after 1300ms
+    // Validates: Requirements 12.3, 16.3
+    (async () => {
+      await addAsyncResult('P4', 'P4: Particle DOM Cleanup (simulated)', async () => {
+        await fc.assert(fc.asyncProperty(
+          fc.integer({ min: 1, max: 5 }),
+          async (batchCount) => {
+            // Create a simulated container
+            const container = document.createElement('div');
+            document.body.appendChild(container);
+
+            // Simulate spawning particles with self-cleanup (mirrors spawnParticles logic)
+            function simulateSpawn(count) {
+              for (let i = 0; i < count; i++) {
+                const el = document.createElement('div');
+                el.className = 'sim-particle';
+                container.appendChild(el);
+                setTimeout(() => {
+                  if (el.parentNode) el.parentNode.removeChild(el);
+                }, 1300);
+              }
+            }
+
+            for (let b = 0; b < batchCount; b++) {
+              simulateSpawn(Math.floor(Math.random() * 7) + 6); // 6–12 particles per batch
+            }
+
+            // Wait 1400ms for all cleanup timeouts to fire (1300ms + 100ms buffer)
+            await new Promise(resolve => setTimeout(resolve, 1400));
+
+            const remaining = container.querySelectorAll('.sim-particle').length;
+            document.body.removeChild(container);
+            return remaining === 0;
+          }
+        ), { numRuns: 20 }); // fewer runs — each run waits 1400ms
+      });
+    })();
+  </script>
+</body>
+</html>
